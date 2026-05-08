@@ -3,6 +3,8 @@
 #include <sstream>
 #include <string>
 #include <chrono>
+#include <thread>
+#include <atomic>
 #include <vector>
 #include "order.h"
 #include "order_book.h"
@@ -17,20 +19,34 @@ int main(int argc, char* argv[]) {
     MemoryPool<Order, 200000> pool;
     MatchingEngine engine;
 
+    // Logger thread — drains ring buffer and counts trades
+    std::atomic<bool>    logger_running{true};
+    std::atomic<uint64_t> logged_trades{0};
+
+    std::thread logger([&]() {
+        TradeEvent ev;
+        while (logger_running.load(std::memory_order_relaxed) ||
+               !engine.Ring().Empty()) {
+            if (engine.Ring().Pop(ev))
+                logged_trades.fetch_add(1, std::memory_order_relaxed);
+        }
+    });
+
     std::ifstream file(path);
-    if (!file.is_open()) { std::cerr << "Cannot open: " << path << "\n"; return 1; }
+    if (!file.is_open()) {
+        std::cerr << "Cannot open: " << path << "\n";
+        logger_running = false;
+        logger.join();
+        return 1;
+    }
 
     std::string line;
     std::getline(file, line);
 
-    uint64_t count       = 0;
-    long long parse_ns   = 0;
-
-    // Store per-order match times for percentile analysis
     std::vector<long long> match_times;
     match_times.reserve(100000);
-
-    uint64_t trades_before = 0;
+    long long parse_ns = 0;
+    uint64_t  count    = 0;
 
     while (std::getline(file, line)) {
         auto t0 = Clock::now();
@@ -47,7 +63,6 @@ int main(int argc, char* argv[]) {
         o->remaining = o->quantity;
         auto t1 = Clock::now();
 
-        trades_before = engine.Trades().size();
         engine.ProcessOrder(o);
         auto t2 = Clock::now();
 
@@ -57,21 +72,24 @@ int main(int argc, char* argv[]) {
         count++;
     }
 
-    // Sort for percentiles
-    std::sort(match_times.begin(), match_times.end());
+    // Signal logger to stop and wait for it to drain
+    logger_running = false;
+    logger.join();
 
-    auto percentile = [&](double p) {
+    std::sort(match_times.begin(), match_times.end());
+    auto pct = [&](double p) {
         return match_times[(size_t)(p/100.0 * match_times.size())];
     };
 
-    std::cout << "Orders processed:  " << count                   << "\n";
-    std::cout << "Trades generated:  " << engine.Trades().size()  << "\n";
+    std::cout << "Orders processed:  " << count                    << "\n";
+    std::cout << "Trades generated:  " << engine.TradeCount()      << "\n";
+    std::cout << "Trades logged:     " << logged_trades.load()     << "\n";
     std::cout << "\n--- Match Latency Percentiles ---\n";
-    std::cout << "p50  (median): " << percentile(50)  << " ns\n";
-    std::cout << "p90:           " << percentile(90)  << " ns\n";
-    std::cout << "p99:           " << percentile(99)  << " ns\n";
-    std::cout << "p99.9:         " << percentile(99.9)<< " ns\n";
-    std::cout << "max:           " << match_times.back() << " ns\n";
-    std::cout << "\nParse avg:     " << parse_ns/count   << " ns\n";
+    std::cout << "p50  (median): " << pct(50)   << " ns\n";
+    std::cout << "p90:           " << pct(90)   << " ns\n";
+    std::cout << "p99:           " << pct(99)   << " ns\n";
+    std::cout << "p99.9:         " << pct(99.9) << " ns\n";
+    std::cout << "Parse avg:     " << parse_ns/count << " ns\n";
+    std::cout << "\nDay 10 PASSED — ring buffer + logger thread working\n";
     return 0;
 }

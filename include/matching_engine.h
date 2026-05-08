@@ -1,6 +1,7 @@
 #pragma once
 #include <vector>
 #include "order_book.h"
+#include "ring_buffer.h"
 
 struct TradeEvent {
     uint64_t aggressor_id;
@@ -11,7 +12,8 @@ struct TradeEvent {
 
 class MatchingEngine {
 public:
-    MatchingEngine() { trades_.reserve(500000); }
+    // Ring buffer large enough for burst of trades
+    static constexpr size_t RING_SIZE = 65536; // must be power of 2
 
     void ProcessOrder(Order* order) {
         if (order->type == OrderType::LIMIT)
@@ -20,10 +22,16 @@ public:
             ProcessMarket(order);
     }
 
-    const std::vector<TradeEvent>& Trades() const { return trades_; }
+    SPSCRingBuffer<TradeEvent, RING_SIZE>& Ring() { return ring_; }
     const OrderBook& Book() const { return book_; }
+    uint64_t TradeCount() const { return trade_count_; }
 
 private:
+    void Emit(uint64_t agg, uint64_t rest, int64_t price, uint32_t qty) {
+        ring_.Push(TradeEvent{agg, rest, price, qty});
+        trade_count_++;
+    }
+
     void ProcessLimit(Order* incoming) {
         while (incoming->remaining > 0) {
             PriceLevel* best = (incoming->side == Side::BUY)
@@ -39,9 +47,8 @@ private:
                 Order* resting = best->orders.front();
                 uint32_t fill  = std::min(incoming->remaining,
                                           resting->remaining);
-                trades_.push_back({incoming->order_id,
-                                   resting->order_id,
-                                   best->price, fill});
+                Emit(incoming->order_id, resting->order_id,
+                     best->price, fill);
                 incoming->remaining -= fill;
                 resting->remaining  -= fill;
                 if (resting->remaining == 0)
@@ -61,9 +68,8 @@ private:
                 Order* resting = best->orders.front();
                 uint32_t fill  = std::min(incoming->remaining,
                                           resting->remaining);
-                trades_.push_back({incoming->order_id,
-                                   resting->order_id,
-                                   best->price, fill});
+                Emit(incoming->order_id, resting->order_id,
+                     best->price, fill);
                 incoming->remaining -= fill;
                 resting->remaining  -= fill;
                 if (resting->remaining == 0)
@@ -73,5 +79,6 @@ private:
     }
 
     OrderBook book_;
-    std::vector<TradeEvent> trades_;
+    SPSCRingBuffer<TradeEvent, RING_SIZE> ring_;
+    uint64_t trade_count_ = 0;
 };
