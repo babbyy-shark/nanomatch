@@ -83,6 +83,20 @@ is the single highest-impact optimization for production workloads.
 ---
 
 ## File Structure
+nanomatch/
+├── include/
+│   ├── order.h            # alignas(64) Order struct
+│   ├── price_level.h      # FIFO queue at one price
+│   ├── order_book.h       # Full LOB, bid + ask sides
+│   ├── matching_engine.h  # Core match loop + ring buffer
+│   ├── memory_pool.h      # Arena allocator, zero heap
+│   └── ring_buffer.h      # Lock-free SPSC
+├── src/
+│   └── main.cpp           # CSV loader + latency report
+├── bench/
+│   └── bench_main.cpp     # Google Benchmark suite
+└── data/synthetic/
+└── gen_orders.py      # Synthetic order generator
 ---
 
 ## Why These Decisions
