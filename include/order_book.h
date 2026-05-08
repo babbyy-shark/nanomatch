@@ -54,7 +54,9 @@ public:
     PriceLevel* BestAsk() { return asks_.empty() ? nullptr : &asks_.front(); }
 
     std::vector<PriceLevel>& Bids() { return bids_; }
+    const std::vector<PriceLevel>& Bids() const { return bids_; }
     std::vector<PriceLevel>& Asks() { return asks_; }
+    const std::vector<PriceLevel>& Asks() const { return asks_; }
 
     size_t BidLevels() const { return bids_.size(); }
     size_t AskLevels() const { return asks_.size(); }
