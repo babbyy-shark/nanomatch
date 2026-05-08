@@ -1,57 +1,73 @@
 #include <iostream>
 #include <cassert>
 #include "order.h"
-#include "price_level.h"
 #include "order_book.h"
+#include "matching_engine.h"
 
 int main() {
     std::cout << "Order size: " << sizeof(Order) << " bytes\n";
     std::cout << "Cache aligned: " << (alignof(Order) == 64 ? "YES" : "NO") << "\n";
     std::cout << "NANOMATCH booting...\n\n";
 
-    // Days 2-3 regression check
-    OrderBook book;
-    Order o1{10, 10050, 100, 100, Side::BUY,  OrderType::LIMIT, {}};
-    Order o2{11, 10045, 200, 200, Side::BUY,  OrderType::LIMIT, {}};
-    Order o3{12, 10055,  50,  50, Side::BUY,  OrderType::LIMIT, {}};
-    Order o4{20, 10060, 150, 150, Side::SELL, OrderType::LIMIT, {}};
-    Order o5{21, 10065,  75,  75, Side::SELL, OrderType::LIMIT, {}};
+    MatchingEngine engine;
 
-    book.Add(&o1); book.Add(&o2); book.Add(&o3);
-    book.Add(&o4); book.Add(&o5);
+    // Add resting SELL orders to the book
+    Order s1{1, 10045, 100, 100, Side::SELL, OrderType::LIMIT, {}};
+    Order s2{2, 10050,  50,  50, Side::SELL, OrderType::LIMIT, {}};
+    engine.ProcessOrder(&s1);
+    engine.ProcessOrder(&s2);
 
-    assert(book.BestBid()->price == 10055);
-    assert(book.BestAsk()->price == 10060);
-    assert(book.BidLevels() == 3);
-    assert(book.AskLevels() == 2);
-    std::cout << "Basic book: PASSED\n";
+    // No trades yet — these just rest in the book
+    assert(engine.Trades().size() == 0);
+    std::cout << "Resting orders added: PASSED\n";
 
-    // Day 4 — cancel the ONLY order at a price level
-    // Cancelling o3 (only order at 10055) should remove that level entirely
-    assert(book.Cancel(12) == true);
-    assert(book.BidLevels() == 2);           // level at 10055 gone
-    assert(book.BestBid()->price == 10050);  // best bid drops to 10050
-    std::cout << "Empty level cleanup: PASSED\n";
+    // BUY at 10050 — should match s1 fully (100 shares at 10045)
+    // then match s2 partially (needs 50 more, s2 has exactly 50)
+    Order b1{3, 10050, 150, 150, Side::BUY, OrderType::LIMIT, {}};
+    engine.ProcessOrder(&b1);
 
-    // Cancel non-existent order
-    assert(book.Cancel(999) == false);
-    std::cout << "Cancel non-existent: PASSED\n";
+    assert(engine.Trades().size() == 2);
 
-    // Cancel all orders on ask side — book should report empty asks
-    assert(book.Cancel(20) == true);
-    assert(book.Cancel(21) == true);
-    assert(book.BestAsk() == nullptr);       // no asks left
-    assert(book.AskLevels() == 0);
-    std::cout << "Full side cancel: PASSED\n";
+    // First trade: matched s1 at 10045 for 100 shares
+    assert(engine.Trades()[0].resting_id  == 1);
+    assert(engine.Trades()[0].price       == 10045);
+    assert(engine.Trades()[0].quantity    == 100);
 
-    // Two orders at same price — cancel one, other remains
-    Order o6{30, 10050, 100, 100, Side::BUY, OrderType::LIMIT, {}};
-    book.Add(&o6);
-    assert(book.Cancel(10) == true);         // cancel o1
-    assert(book.BestBid()->price == 10050);  // level still exists (o6 remains)
-    assert(book.BidLevels() == 2);           // 10050 and 10045 still there
-    std::cout << "Partial level cancel: PASSED\n";
+    // Second trade: matched s2 at 10050 for 50 shares
+    assert(engine.Trades()[1].resting_id  == 2);
+    assert(engine.Trades()[1].price       == 10050);
+    assert(engine.Trades()[1].quantity    == 50);
 
-    std::cout << "\nAll Day 4 tests PASSED\n";
+    // b1 fully filled — should NOT be in book
+    assert(engine.Book().BestAsk() == nullptr);
+    std::cout << "Limit order match: PASSED\n";
+
+    // Market order test — add a resting SELL, fire market BUY
+    MatchingEngine engine2;
+    Order s3{10, 10060, 200, 200, Side::SELL, OrderType::LIMIT,  {}};
+    Order m1{11,     0,  80,  80, Side::BUY,  OrderType::MARKET, {}};
+    engine2.ProcessOrder(&s3);
+    engine2.ProcessOrder(&m1);
+
+    assert(engine2.Trades().size() == 1);
+    assert(engine2.Trades()[0].quantity == 80);
+    assert(engine2.Trades()[0].price    == 10060);
+    std::cout << "Market order match: PASSED\n";
+
+    // Partial fill — BUY more than available
+    MatchingEngine engine3;
+    Order s4{20, 10040, 50, 50, Side::SELL, OrderType::LIMIT, {}};
+    Order b2{21, 10040, 80, 80, Side::BUY,  OrderType::LIMIT, {}};
+    engine3.ProcessOrder(&s4);
+    engine3.ProcessOrder(&b2);
+
+    assert(engine3.Trades().size() == 1);
+    assert(engine3.Trades()[0].quantity == 50);  // only 50 available
+    // Remaining 30 should rest as BUY in book
+    assert(engine3.Book().BestBid()->price    == 10040);
+    assert(engine3.Book().BestBid()->orders.front()->remaining == 30);
+    std::cout << "Partial fill: PASSED\n";
+
+    std::cout << "\nAll Day 5 tests PASSED — first trades generated!\n";
     return 0;
 }
