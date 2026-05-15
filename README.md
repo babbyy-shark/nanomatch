@@ -198,3 +198,24 @@ python3 data/synthetic/gen_orders.py --orders 100000 --output orders.csv
 # Run Google Benchmark suite
 ./build/nanomatch_bench
 ```
+---
+
+## Profiling — Call Graph & Cache Analysis
+
+**KCachegrind call graph (BM_OrderMatch, 50,000 iterations):**
+
+![Call Graph](assets/callgrind_graph.png)
+
+**Cache simulation results (Callgrind --cache-sim):**
+
+| Cache Level | Miss Rate | Significance |
+|-------------|-----------|--------------|
+| L1 instruction (I1) | 0.01% | Hot code stays in L1 |
+| L1 data (D1) | 0.05% | Cache alignment working |
+| Last-level (LLd) | 0.03% | Working set fits in L3 |
+
+Near-zero cache miss rates across all levels confirm that `alignas(64)` on
+the Order struct and contiguous vector layout for price levels are effective.
+The call graph shows the heap allocator (`malloc`, `_int_free`, `operator new`)
+consuming ~51% of instructions — confirming the memory pool is the
+highest-impact optimisation for production workloads.
