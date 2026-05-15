@@ -1,7 +1,7 @@
 #pragma once
-#include <vector>
-#include <unordered_map>
 #include <algorithm>
+#include <unordered_map>
+#include <vector>
 #include "price_level.h"
 
 class OrderBook {
@@ -23,18 +23,21 @@ public:
 
         if (order->side == Side::BUY) {
             std::sort(bids_.begin(), bids_.end(),
-                [](const PriceLevel& a, const PriceLevel& b){
-                    return a.price > b.price; });
+                [](const PriceLevel& a, const PriceLevel& b) {
+                    return a.price > b.price;
+                });
         } else {
             std::sort(asks_.begin(), asks_.end(),
-                [](const PriceLevel& a, const PriceLevel& b){
-                    return a.price < b.price; });
+                [](const PriceLevel& a, const PriceLevel& b) {
+                    return a.price < b.price;
+                });
         }
     }
 
     bool Cancel(uint64_t order_id) {
         auto it = order_map_.find(order_id);
         if (it == order_map_.end()) return false;
+
         PriceLevel* level = it->second;
         auto& q = level->orders;
         for (auto qit = q.begin(); qit != q.end(); ++qit) {
@@ -48,25 +51,11 @@ public:
         return false;
     }
 
-    // Remove empty levels from front only — O(1) amortized
-    void PruneFront() {
-        while (!bids_.empty() && bids_.front().empty())
-            bids_.erase(bids_.begin());
-        while (!asks_.empty() && asks_.front().empty())
-            asks_.erase(asks_.begin());
-    }
+    PriceLevel* BestBid() { PruneFront(bids_); return bids_.empty() ? nullptr : &bids_.front(); }
+    PriceLevel* BestAsk() { PruneFront(asks_); return asks_.empty() ? nullptr : &asks_.front(); }
 
-    PriceLevel* BestBid() {
-        PruneFont(bids_);
-        return bids_.empty() ? nullptr : &bids_.front();
-    }
-    PriceLevel* BestAsk() {
-        PruneFont(asks_);
-        return asks_.empty() ? nullptr : &asks_.front();
-    }
-
-    std::vector<PriceLevel>& Bids() { return bids_; }
-    std::vector<PriceLevel>& Asks() { return asks_; }
+    std::vector<PriceLevel>&       Bids()       { return bids_; }
+    std::vector<PriceLevel>&       Asks()       { return asks_; }
     const std::vector<PriceLevel>& Bids() const { return bids_; }
     const std::vector<PriceLevel>& Asks() const { return asks_; }
 
@@ -75,19 +64,18 @@ public:
     bool   Empty()     const { return bids_.empty() && asks_.empty(); }
 
 private:
-    void PruneFont(std::vector<PriceLevel>& side) {
+    void PruneFront(std::vector<PriceLevel>& side) {
         while (!side.empty() && side.front().empty())
             side.erase(side.begin());
     }
 
     void CleanEmptyLevels() {
-        bids_.erase(std::remove_if(bids_.begin(), bids_.end(),
-            [](const PriceLevel& l){ return l.empty(); }), bids_.end());
-        asks_.erase(std::remove_if(asks_.begin(), asks_.end(),
-            [](const PriceLevel& l){ return l.empty(); }), asks_.end());
+        auto empty = [](const PriceLevel& l) { return l.empty(); };
+        bids_.erase(std::remove_if(bids_.begin(), bids_.end(), empty), bids_.end());
+        asks_.erase(std::remove_if(asks_.begin(), asks_.end(), empty), asks_.end());
     }
 
-    std::vector<PriceLevel> bids_;
-    std::vector<PriceLevel> asks_;
-    std::unordered_map<uint64_t, PriceLevel*> order_map_;
+    std::vector<PriceLevel>                    bids_;
+    std::vector<PriceLevel>                    asks_;
+    std::unordered_map<uint64_t, PriceLevel*>  order_map_;
 };
