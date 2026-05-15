@@ -40,9 +40,11 @@ executes in **114 nanoseconds**.
 | `BM_OrderRest` | 86 ns | Order insert with no match |
 | `BM_OrderMatch` | 114 ns | Complete trade execution |
 | `BM_RingBuffer` | 7 ns | Lock-free event logging |
-| p50 — real workload | 328 ns | Median latency over 100K orders |
-| p90 — real workload | 21,643 ns | Heavy multi-fill orders |
-| p99 — real workload | 51,742 ns | Worst-case tail latency |
+| p50 — real workload | 260 ns | Median latency over 100K orders |
+| p90 — real workload | 15,156 ns | Heavy multi-fill orders |
+| p99 — real workload | 25,643 ns | Worst-case tail latency |
+| p99.9 — real workload | 32,281 ns | Extreme tail latency |
+| Parse avg | 256 ns | CSV parse per order |
 | Throughput | ~137K orders/sec | End-to-end with CSV parsing |
 | Trade accuracy | 95,094 / 95,094 | Zero drops through ring buffer |
 
@@ -105,7 +107,7 @@ nanomatch/
 ### `alignas(64)` on the Order Struct
 Every Order is exactly 64 bytes — one CPU cache line. The CPU fetches memory in
 64-byte chunks. If an Order spans two cache lines, the CPU needs two fetches instead
-of one — double the latency. `alignas(64)` enforces the boundary. 
+of one — double the latency. `alignas(64)` enforces the boundary.
 `static_assert(sizeof(Order) == 64)` makes the compiler verify this at build time.
 
 ### Sorted `vector` Instead of `std::map`
@@ -117,8 +119,8 @@ for the small number of active price levels typical in a real order book.
 ### Memory Pool (`MemoryPool<Order, 200000>`)
 `malloc()` takes ~200ns per call — it searches a free-list, marks the block, and
 returns a pointer. The pool pre-allocates 200K Order slots in one `aligned_alloc()`
-call at startup. `Acquire()` pops a slot in ~5ns. Zero OS calls, zero heap fragmentation
-on the hot path.
+call at startup. `Acquire()` pops a slot in ~5ns. Zero OS calls, zero heap
+fragmentation on the hot path.
 
 ### Lock-Free SPSC Ring Buffer
 A mutex triggers a `futex()` syscall when contended — this costs 1–10 microseconds,
@@ -128,20 +130,19 @@ involvement. No blocking. Both indices have their own `alignas(64)` cache line t
 prevent false sharing between the producer (engine) and consumer (logger) cores.
 
 ### Profiling Result
-Callgrind revealed that **44% of CPU instructions in benchmarks were heap
-allocator calls** — confirming the memory pool is the single highest-impact
-optimisation for production workloads. Only 8% of instructions were actual
-matching logic.
+Callgrind revealed that **44% of CPU instructions in benchmarks were heap allocator
+calls** — confirming the memory pool is the single highest-impact optimisation for
+production workloads. Only 8% of instructions were actual matching logic.
 
 ---
 
 ## Key Engineering Challenges
 
 **1. `assert()` silently disabled in Release builds**
-A quantity conservation check using `assert()` appeared to pass, but the numbers
-showed a mismatch. Root cause: CMake Release mode passes `-DNDEBUG`, which strips
-all `assert()` calls at compile time. Fixed by replacing with explicit `if`-checks
-that work in all build modes.
+A quantity conservation check using `assert()` appeared to pass silently while the
+numbers showed a mismatch. Root cause: CMake Release mode passes `-DNDEBUG`, which
+strips all `assert()` calls at compile time. Fixed by replacing with explicit
+`if`-checks that work in all build modes.
 
 **2. Const correctness compiler error**
 `BestBid()` / `BestAsk()` were called on a `const OrderBook&`. The compiler refused
@@ -150,14 +151,14 @@ overloads — the compiler picks the correct version based on the object's
 const-qualification.
 
 **3. False sharing in the ring buffer**
-`head_` and `tail_` declared sequentially shared a cache line. The producer
-writing `tail_` invalidated the consumer's cached copy of `head_` on every push —
-constant cross-core cache-line transfer. Fixed with `alignas(64)` on both,
-giving each its own dedicated cache line.
+`head_` and `tail_` declared sequentially shared a cache line. The producer writing
+`tail_` invalidated the consumer's cached copy of `head_` on every push — constant
+cross-core cache-line transfer. Fixed with `alignas(64)` on both, giving each its
+own dedicated cache line.
 
 **4. Ghost price levels after cancel**
 Cancelling the last order at a price left an empty `PriceLevel` in the vector.
-`BestBid()` returned this empty level, causing null dereference downstream.
+`BestBid()` returned this empty level, causing a null dereference downstream.
 Fixed with the erase-remove idiom using `std::remove_if` after every cancel.
 
 ---
